@@ -12,6 +12,7 @@ Bridge 推送的数据，显示今日 token 消耗、模型分布、活跃时长
 ```
 Qwen Code sessions → .jsonl files → Bridge (Node.js)
     → BLE write → ESP32 GATT → LVGL UI → 400×300 墨水屏
+    → status JSON → macOS 菜单栏仪表盘 (SwiftUI)
 ```
 
 ## 硬件
@@ -28,8 +29,11 @@ token-monitor-ble/
 ├── firmware/          # ESP-IDF v5.x 固件
 │   ├── main/          # 入口 + 配置
 │   └── components/    # BLE、UI、传感器等模块
-└── bridge/            # Node.js BLE 桥接进程
-    └── src/index.js   # 读取会话文件 → BLE 推送
+├── bridge/            # Node.js BLE 桥接进程
+│   └── src/index.js   # 读取会话文件 → BLE 推送 + 状态 JSON
+└── menubar/           # macOS 菜单栏仪表盘（SwiftUI 弹出面板）
+    ├── QwenBridgeBar.swift
+    └── build.sh       # 编译为 .app
 ```
 
 ## 快速配置（新设备）
@@ -167,6 +171,35 @@ Payload 为 `|` 分隔的文本（v3 格式）：
 - Bridge 必须在**有蓝牙权限的终端**里运行（iTerm / Terminal.app），sandbox 环境无法使用 BLE
 - ESP32 与电脑蓝牙距离保持在 10m 以内
 - 首次编译会通过 IDF Component Manager 下载 LVGL（~50MB），需联网
+
+## macOS 菜单栏仪表盘（可选）
+
+SwiftUI 菜单栏应用，镜像 ESP32 墨水屏的仪表盘数据 —— 用原生 macOS 弹出面板展示相同的 token 数据，附带 BLE/Bridge 状态和控制。
+
+### 工作原理
+
+Bridge 每秒将完整的 token 报告和 BLE 连接状态写入状态文件（`/tmp/qwen-token-status.json`），菜单栏应用读取该文件并通过 SwiftUI 渲染。
+
+### 编译 & 运行
+
+```bash
+cd menubar
+bash build.sh
+open QwenBridgeBar.app
+```
+
+点击菜单栏的 **QC** 图标打开仪表盘弹出面板，展示内容：
+
+- 今日 token 消耗 + 一亿小目标进度条
+- Top 3 模型及占比
+- Sessions、活跃时长、Input/Output Tokens、缓存命中率、7 天总量
+- BLE 连接状态（已连接设备名 / 扫描中）
+- Bridge 进程状态（运行中 / 已停止）
+- Start / Stop / Restart / Open Log 控制按钮
+
+### 开机自启动（可选）
+
+将编译好的 `.app` 添加到 **系统设置 → 通用 → 登录项** 中即可开机自启。
 
 ## Troubleshooting
 

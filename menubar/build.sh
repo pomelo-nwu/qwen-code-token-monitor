@@ -9,6 +9,8 @@ APP_DIR="$SCRIPT_DIR/$APP_NAME.app"
 echo "Compiling $APP_NAME.swift …"
 swiftc -o "$SCRIPT_DIR/$APP_NAME" \
     -framework Cocoa \
+    -framework SwiftUI \
+    -target arm64-apple-macos12.0 \
     -suppress-warnings \
     "$SCRIPT_DIR/$APP_NAME.swift"
 
@@ -17,6 +19,9 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$SCRIPT_DIR/$APP_NAME" "$APP_DIR/Contents/MacOS/"
 cp "$SCRIPT_DIR/capybara_icon.png" "$APP_DIR/Contents/Resources/"
+cp "$SCRIPT_DIR/capybara_icon@2x.png" "$APP_DIR/Contents/Resources/"
+cp "$SCRIPT_DIR/avatar.png" "$APP_DIR/Contents/Resources/"
+cp "$SCRIPT_DIR/menubar_icon.png" "$APP_DIR/Contents/Resources/"
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

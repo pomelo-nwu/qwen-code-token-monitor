@@ -11,6 +11,7 @@ A real-time token usage dashboard for [Qwen Code](https://github.com/QwenLM/qwen
 ```
 Qwen Code sessions → .jsonl files → Bridge (Node.js)
     → BLE write → ESP32 GATT → LVGL UI → 400×300 reflective LCD
+    → status JSON → macOS menu bar dashboard (SwiftUI)
 ```
 
 ## Hardware
@@ -27,8 +28,11 @@ token-monitor-ble/
 ├── firmware/          # ESP-IDF v5.x firmware
 │   ├── main/          # Entry point + config
 │   └── components/    # BLE, UI, sensor modules
-└── bridge/            # Node.js BLE bridge
-    └── src/index.js   # Reads session files → BLE push
+├── bridge/            # Node.js BLE bridge
+│   └── src/index.js   # Reads session files → BLE push + status JSON
+└── menubar/           # macOS menu bar dashboard (SwiftUI popover)
+    ├── QwenBridgeBar.swift
+    └── build.sh       # Compile to .app bundle
 ```
 
 ## Quick Start (New Device)
@@ -161,6 +165,35 @@ Payload is `|`-delimited text (v3 format):
 - Bridge must run in a **terminal with Bluetooth access** (iTerm / Terminal.app), not in sandboxed environments
 - Keep ESP32 within 10m of the host computer
 - First build downloads LVGL (~50MB) via IDF Component Manager — requires internet
+
+## macOS Menu Bar Dashboard (Optional)
+
+A SwiftUI menu bar app that mirrors the ESP32 dashboard — shows the same token data in a native macOS popover, plus BLE/Bridge status and controls.
+
+### How it works
+
+The bridge writes a status JSON file (`/tmp/qwen-token-status.json`) every second with the full token report and BLE connection state. The menu bar app reads this file and renders it via SwiftUI.
+
+### Build & Run
+
+```bash
+cd menubar
+bash build.sh
+open QwenBridgeBar.app
+```
+
+Click the **QC** menu bar item to open the dashboard popover. The popover shows:
+
+- Today's token count + progress toward the 100M goal
+- Top 3 models with percentages
+- Sessions, active time, input/output tokens, cache rate, 7-day total
+- BLE connection status (connected device name / scanning)
+- Bridge process status (running / stopped)
+- Start / Stop / Restart / Open Log controls
+
+### Auto-launch (optional)
+
+Add the compiled `.app` to **System Settings → General → Login Items** to launch on boot.
 
 ## Troubleshooting
 

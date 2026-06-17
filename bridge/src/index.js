@@ -10,8 +10,11 @@ const INTERVAL_MS = Number(process.env.QWEN_BLE_PUSH_MS ?? 1000);
 const RECENT_DAYS = Number(process.env.QWEN_BLE_SCAN_DAYS ?? 7);
 const TAIL_BYTES = Number(process.env.QWEN_BLE_TAIL_BYTES ?? 2 * 1024 * 1024);
 const ACTIVE_GAP_MS = 5 * 60 * 1000;
+const STATUS_FILE = '/tmp/qwen-token-status.json';
 
 let dataChar = null;
+let bleConnected = false;
+let bleDevice = '';
 let connectedPeripheral = null;
 let scanTimer = null;
 let pushTimer = null;
@@ -258,9 +261,24 @@ function toPayload(r) {
   ].join('|');
 }
 
-async function writePayload() {
-  if (!dataChar) return;
+function writeStatusFile(report) {
+  const status = {
+    ...report,
+    bleConnected,
+    bleDevice,
+    timestamp: Date.now(),
+  };
+  try {
+    fs.writeFileSync(STATUS_FILE, JSON.stringify(status));
+  } catch (err) {
+    console.error('[status] write failed:', err.message);
+  }
+}
+
+async function pushTick() {
   const report = buildReport();
+  writeStatusFile(report);
+  if (!dataChar) return;
   const payload = toPayload(report);
   await new Promise((resolve, reject) => {
     dataChar.write(Buffer.from(payload), false, (err) => err ? reject(err) : resolve());
@@ -270,9 +288,9 @@ async function writePayload() {
 
 function startPushLoop() {
   clearInterval(pushTimer);
-  writePayload().catch((err) => console.error('[ble] write failed:', err.message));
+  pushTick().catch((err) => console.error('[ble] write failed:', err.message));
   pushTimer = setInterval(() => {
-    writePayload().catch((err) => console.error('[ble] write failed:', err.message));
+    pushTick().catch((err) => console.error('[ble] write failed:', err.message));
   }, INTERVAL_MS);
 }
 
@@ -310,17 +328,18 @@ function connect(peripheral) {
       return;
     }
     connectedPeripheral = peripheral;
+    bleDevice = peripheral.advertisement.localName ?? 'unknown';
     peripheral.once('disconnect', () => {
       console.log('[ble] disconnected');
       dataChar = null;
       connectedPeripheral = null;
-      clearInterval(pushTimer);
+      bleConnected = false;
       startScan();
     });
     try {
       dataChar = await discoverCharacteristic(peripheral);
+      bleConnected = true;
       console.log('[ble] ready');
-      startPushLoop();
     } catch (e) {
       console.error('[ble] discover failed:', e.message);
       try { peripheral.disconnect(); } catch {}
@@ -355,6 +374,8 @@ noble.on('discover', (peripheral) => {
   if (!DEVICE_NAMES.has(name)) return;
   connect(peripheral);
 });
+
+startPushLoop();
 
 process.on('SIGINT', () => {
   clearInterval(pushTimer);
