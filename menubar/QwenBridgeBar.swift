@@ -8,32 +8,9 @@ import SwiftUI
 
 // MARK: - Constants
 
-let LABEL = "com.pomelo.qwen-token-bridge"
-let PLIST = "\(NSHomeDirectory())/Library/LaunchAgents/com.pomelo.qwen-token-bridge.plist"
 let LOG_FILE = "/tmp/qwen-token-bridge-stdout.log"
 let STATUS_FILE = "/tmp/qwen-token-status.json"
 let GOAL_TARGET: Double = 100_000_000
-
-// MARK: - Shell helpers
-
-func shell(_ args: [String]) -> String {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    p.arguments = args
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = Pipe()
-    do { try p.run() } catch { return "" }
-    p.waitUntilExit()
-    return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-}
-
-func getPID() -> Int {
-    let out = shell(["list", LABEL])
-    if out.isEmpty { return -1 }
-    let pidStr = out.split(separator: "\t").first ?? ""
-    return Int(pidStr) ?? -1
-}
 
 // MARK: - Data Model
 
@@ -87,6 +64,35 @@ func greetingText() -> String {
     return "晚上好～"
 }
 
+// MARK: - Bridge Process Manager
+
+func findNode() -> String? {
+    // Check common paths first, then fall back to PATH lookup
+    let candidates = [
+        "/usr/local/bin/node",
+        "/opt/homebrew/bin/node",
+        NSHomeDirectory() + "/.nvm/versions/node/v22.22.2/bin/node",
+    ]
+    for path in candidates {
+        if FileManager.default.isExecutableFile(atPath: path) { return path }
+    }
+    // Fallback: use `which`
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+    p.arguments = ["node"]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    do { try p.run(); p.waitUntilExit() } catch { return nil }
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (out != nil && FileManager.default.isExecutableFile(atPath: out!)) ? out : nil
+}
+
+func bridgeScriptPath() -> String? {
+    return Bundle.main.path(forResource: "index", ofType: "js", inDirectory: "Bridge")
+        ?? Bundle.main.path(forResource: "index", ofType: "js")
+}
+
 // MARK: - Status Manager
 
 class StatusManager: ObservableObject {
@@ -103,6 +109,7 @@ class StatusManager: ObservableObject {
     }()
 
     private var timer: Timer?
+    private var bridgeProcess: Process?
 
     func start() {
         refresh()
@@ -112,47 +119,92 @@ class StatusManager: ObservableObject {
     func stop() { timer?.invalidate() }
 
     private func refresh() {
+        // Read status file
         if let data = try? Data(contentsOf: URL(fileURLWithPath: STATUS_FILE)) {
             fileExists = true
             if let decoded = try? JSONDecoder().decode(TokenStatus.self, from: data) {
-                DispatchQueue.main.async {
-                    self.status = decoded
-                }
+                DispatchQueue.main.async { self.status = decoded }
             }
         } else {
-            DispatchQueue.main.async {
-                self.fileExists = false
-            }
+            DispatchQueue.main.async { self.fileExists = false }
         }
-        let pid = getPID()
+
+        // Check if bridge process is alive
+        let pid = bridgeProcess?.processIdentifier ?? -1
+        let alive = pid > 0 && (bridgeProcess?.isRunning ?? false)
         DispatchQueue.main.async {
-            self.bridgeRunning = pid > 0
-            self.bridgePID = pid
+            self.bridgeRunning = alive
+            self.bridgePID = alive ? Int(pid) : -1
         }
     }
 
     func doStart() {
-        shell(["load", PLIST])
+        guard bridgeProcess?.isRunning != true else { return }
+        guard let nodePath = findNode() else { return }
+        guard let scriptPath = bridgeScriptPath() else { return }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: nodePath)
+        process.arguments = [scriptPath]
+        process.currentDirectoryURL = URL(fileURLWithPath: (scriptPath as NSString).deletingLastPathComponent)
+
+        // Pass BLE device name as env var
+        var env = ProcessInfo.processInfo.environment
+        if !bleDeviceName.isEmpty {
+            env["QWEN_BLE_DEVICE_NAME"] = bleDeviceName
+        }
+        process.environment = env
+
+        // Redirect stdout/stderr to log file via pipe
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = outPipe
+        FileManager.default.createFile(atPath: LOG_FILE, contents: nil)
+        let logFH = FileHandle(forWritingAtPath: LOG_FILE)
+        outPipe.fileHandleForReading.readabilityHandler = { fh in
+            let data = fh.availableData
+            if !data.isEmpty { logFH?.write(data) }
+        }
+
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.bridgeProcess = nil
+                self?.refresh()
+            }
+        }
+
+        do {
+            try process.run()
+            bridgeProcess = process
+        } catch {
+            print("[bridge] start failed: \(error)")
+        }
         Thread.sleep(forTimeInterval: 0.5)
         refresh()
     }
 
     func doStop() {
-        shell(["unload", PLIST])
+        guard let process = bridgeProcess, process.isRunning else { return }
+        // Send SIGTERM for clean BLE disconnect
+        kill(process.processIdentifier, SIGTERM)
+        // Force kill after 3 seconds if still alive
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [weak self] in
+            if let p = self?.bridgeProcess, p.isRunning {
+                p.terminate()
+            }
+        }
         Thread.sleep(forTimeInterval: 0.5)
         refresh()
     }
 
     func doRestart() {
-        shell(["unload", PLIST])
+        doStop()
         Thread.sleep(forTimeInterval: 1)
-        shell(["load", PLIST])
-        refresh()
+        doStart()
     }
 
     func applyBleDeviceName() {
         UserDefaults.standard.set(bleDeviceName, forKey: "bleDeviceName")
-        updatePlistEnvVar("QWEN_BLE_DEVICE_NAME", bleDeviceName)
         doRestart()
     }
 
@@ -170,23 +222,6 @@ class StatusManager: ObservableObject {
                 print("[launch] failed: \(error)")
             }
         }
-    }
-
-    private func updatePlistEnvVar(_ key: String, _ value: String) {
-        guard FileManager.default.fileExists(atPath: PLIST) else { return }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: PLIST)),
-              var plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return }
-
-        var envVars = (plist["EnvironmentVariables"] as? [String: String]) ?? [:]
-        if value.isEmpty {
-            envVars.removeValue(forKey: key)
-        } else {
-            envVars[key] = value
-        }
-        plist["EnvironmentVariables"] = envVars
-
-        guard let updatedData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else { return }
-        try? updatedData.write(to: URL(fileURLWithPath: PLIST))
     }
 }
 
@@ -368,7 +403,7 @@ struct DashboardView: View {
                 Spacer()
             }
 
-            // ── Controls ──
+            // ── Controls ─
             HStack(spacing: 8) {
                 if manager.bridgeRunning {
                     Button("Stop") { manager.doStop() }
@@ -381,6 +416,7 @@ struct DashboardView: View {
                     NSWorkspace.shared.open(URL(fileURLWithPath: LOG_FILE))
                 }
                 Button("Quit") {
+                    manager.doStop()
                     manager.stop()
                     NSApp.terminate(nil)
                 }
@@ -400,7 +436,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     let manager = StatusManager()
-    private var iconTimer: Timer?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -418,6 +453,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(rootView: DashboardView(manager: manager))
 
         manager.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.manager.doStart()
+        }
     }
 
     @objc func togglePopover() {
@@ -439,6 +477,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ n: Notification) {
+        manager.doStop()
         manager.stop()
     }
 }

@@ -16,5 +16,7 @@
     <true/>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>QwenBridgeBar uses Bluetooth to push token usage data to the ESP32 e-ink display.</string>
 </dict>
 </plist>

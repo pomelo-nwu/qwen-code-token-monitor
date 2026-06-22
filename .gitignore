@@ -22,3 +22,6 @@ firmware/main/secrets.h
 
 # DMG build artifact
 *.dmg
+
+# Bundled bridge node_modules (build artifact)
+menubar/QwenBridgeBar.app/Contents/Resources/Bridge/node_modules/

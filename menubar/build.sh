@@ -43,6 +43,21 @@ if [ ! -f "$SCRIPT_DIR/AppIcon.icns" ]; then
 fi
 cp "$SCRIPT_DIR/AppIcon.icns" "$APP_DIR/Contents/Resources/"
 
+# --- Bundle Bridge (Node.js daemon) ---
+BRIDGE_SRC="$SCRIPT_DIR/../bridge"
+BRIDGE_DST="$APP_DIR/Contents/Resources/Bridge"
+if [ -d "$BRIDGE_SRC/node_modules" ]; then
+    echo "Bundling bridge into $BRIDGE_DST …"
+    rm -rf "$BRIDGE_DST"
+    mkdir -p "$BRIDGE_DST"
+    cp "$BRIDGE_SRC/src/index.js" "$BRIDGE_DST/"
+    cp "$BRIDGE_SRC/package.json" "$BRIDGE_DST/"
+    cp -R "$BRIDGE_SRC/node_modules" "$BRIDGE_DST/"
+    echo "  $(du -sh "$BRIDGE_DST" | cut -f1) bundled"
+else
+    echo "⚠ bridge/node_modules not found — bridge won't be bundled"
+fi
+
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,6 +77,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <true/>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>QwenBridgeBar uses Bluetooth to push token usage data to the ESP32 e-ink display.</string>
 </dict>
 </plist>
 PLIST
