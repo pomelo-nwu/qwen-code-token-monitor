@@ -9,6 +9,7 @@ APP_DIR="$SCRIPT_DIR/$APP_NAME.app"
 echo "Compiling $APP_NAME.swift …"
 swiftc -o "$SCRIPT_DIR/$APP_NAME" \
     -framework Cocoa \
+    -framework ServiceManagement \
     -framework SwiftUI \
     -target arm64-apple-macos12.0 \
     -suppress-warnings \
@@ -75,10 +76,17 @@ if [ "${1:-}" = "dmg" ]; then
     DMG="$SCRIPT_DIR/$APP_NAME.dmg"
     echo "Creating $DMG …"
     rm -f "$DMG"
-    # Create a temporary DMG, copy the app, then convert to compressed read-only
+
+    # Build a staging folder with the app + /Applications symlink
+    STAGE="$SCRIPT_DIR/.dmg-stage"
+    rm -rf "$STAGE" && mkdir "$STAGE"
+    cp -R "$APP_DIR" "$STAGE/"
+    ln -s /Applications "$STAGE/Applications"
+
     TMP_DMG="$SCRIPT_DIR/${APP_NAME}-tmp.dmg"
-    hdiutil create -ov -volname "$APP_NAME" -fs HFS+ -srcfolder "$APP_DIR" "$TMP_DMG"
+    hdiutil create -ov -volname "$APP_NAME" -fs HFS+ -srcfolder "$STAGE" "$TMP_DMG"
     hdiutil convert -ov -format UDZO -imagekey zlib-level=9 "$TMP_DMG" -o "$DMG"
     rm -f "$TMP_DMG"
+    rm -rf "$STAGE"
     echo "✓ DMG: $DMG"
 fi

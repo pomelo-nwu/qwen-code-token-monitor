@@ -3,6 +3,7 @@
 //  Build: see build.sh
 
 import Cocoa
+import ServiceManagement
 import SwiftUI
 
 // MARK: - Constants
@@ -94,6 +95,12 @@ class StatusManager: ObservableObject {
     @Published var bridgePID: Int = -1
     @Published var fileExists = false
     @Published var bleDeviceName: String = UserDefaults.standard.string(forKey: "bleDeviceName") ?? ""
+    @Published var launchAtLogin: Bool = {
+        if #available(macOS 13.0, *) {
+            return SMAppService.mainApp.status == .enabled
+        }
+        return false
+    }()
 
     private var timer: Timer?
 
@@ -147,6 +154,22 @@ class StatusManager: ObservableObject {
         UserDefaults.standard.set(bleDeviceName, forKey: "bleDeviceName")
         updatePlistEnvVar("QWEN_BLE_DEVICE_NAME", bleDeviceName)
         doRestart()
+    }
+
+    func toggleLaunchAtLogin() {
+        if #available(macOS 13.0, *) {
+            do {
+                if launchAtLogin {
+                    try SMAppService.mainApp.unregister()
+                    launchAtLogin = false
+                } else {
+                    try SMAppService.mainApp.register()
+                    launchAtLogin = true
+                }
+            } catch {
+                print("[launch] failed: \(error)")
+            }
+        }
     }
 
     private func updatePlistEnvVar(_ key: String, _ value: String) {
@@ -334,6 +357,16 @@ struct DashboardView: View {
                     .font(.system(size: 11))
             }
             .padding(.vertical, 6)
+
+            // ── Launch at Login ──
+            HStack {
+                Toggle("Launch at Login", isOn: Binding(
+                    get: { manager.launchAtLogin },
+                    set: { _ in manager.toggleLaunchAtLogin() }
+                ))
+                .font(.system(size: 11))
+                Spacer()
+            }
 
             // ── Controls ──
             HStack(spacing: 8) {
