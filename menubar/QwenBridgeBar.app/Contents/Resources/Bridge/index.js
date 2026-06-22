@@ -11,7 +11,6 @@ const SERVICE_UUID = '00112233445566778899aabbccddeeff';
 const DATA_CHAR_UUID = '00112233445566778899aabbccddee01';
 const INTERVAL_MS = Number(process.env.QWEN_BLE_PUSH_MS ?? 1000);
 const RECENT_DAYS = Number(process.env.QWEN_BLE_SCAN_DAYS ?? 7);
-const TAIL_BYTES = Number(process.env.QWEN_BLE_TAIL_BYTES ?? 2 * 1024 * 1024);
 const ACTIVE_GAP_MS = 5 * 60 * 1000;
 const STATUS_FILE = '/tmp/qwen-token-status.json';
 
@@ -44,50 +43,22 @@ function runtimeDir() {
   return process.env.QWEN_RUNTIME_DIR ?? parseEnvFile(path.join(qwenHome, '.env')).QWEN_RUNTIME_DIR ?? homeEnv.QWEN_RUNTIME_DIR ?? qwenHome;
 }
 
-function usageTotal(u) {
-  return Number(u.totalTokenCount ?? 0) ||
-    Number(u.promptTokenCount ?? 0) +
-    Number(u.candidatesTokenCount ?? 0) +
-    Number(u.thoughtsTokenCount ?? 0);
-}
-
-function sessionFiles() {
-  const base = runtimeDir();
-  const cutoff = Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000;
+function usageFiles() {
+  const dir = path.join(runtimeDir(), 'usage');
+  const cutoff = Date.now() - (RECENT_DAYS + 1) * 24 * 60 * 60 * 1000;
   const files = [];
-  const scanRoot = (root) => {
-    try {
-      if (!fs.existsSync(root)) return;
-      for (const project of fs.readdirSync(root)) {
-        const chats = path.join(root, project, 'chats');
-        if (!fs.existsSync(chats)) continue;
-        for (const name of fs.readdirSync(chats)) {
-          if (!/^[0-9a-fA-F-]{32,36}\.jsonl$/.test(name)) continue;
-          const file = path.join(chats, name);
-          const stat = fs.statSync(file);
-          if (stat.mtimeMs >= cutoff) files.push({ file, stat });
-        }
-      }
-    } catch {
-      // Keep the bridge alive if a session file is rotated while scanning.
-    }
-  };
-  scanRoot(path.join(base, 'projects'));
-  scanRoot(path.join(base, 'tmp'));
-  return files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-}
-
-function readTail(file, size) {
-  const stat = fs.statSync(file);
-  const fd = fs.openSync(file, 'r');
   try {
-    if (stat.size <= size) return fs.readFileSync(fd, 'utf8');
-    const buf = Buffer.alloc(size);
-    fs.readSync(fd, buf, 0, size, stat.size - size);
-    return buf.toString('utf8').replace(/^[^\n]*\n/, '');
-  } finally {
-    fs.closeSync(fd);
+    if (!fs.existsSync(dir)) return files;
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^token-usage-\d{4}-\d{2}\.jsonl$/.test(name)) continue;
+      const file = path.join(dir, name);
+      const stat = fs.statSync(file);
+      if (stat.mtimeMs >= cutoff) files.push({ file, stat });
+    }
+  } catch {
+    // Keep the bridge alive if a usage file is rotated while scanning.
   }
+  return files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
 }
 
 function clampPct(n) {
@@ -106,16 +77,6 @@ function formatStamp(ms) {
 
 function modelName(rec) {
   return String(rec.model ?? 'qwen').replace(/[|\r\n]/g, ' ').trim().slice(0, 23) || 'qwen';
-}
-
-function isErrorRecord(rec) {
-  if (rec.type === 'error') return true;
-  const status = Number(rec.status_code ?? rec.statusCode ?? rec.status);
-  return Number.isFinite(status) && status >= 400;
-}
-
-function sessionKey(rec, file) {
-  return String(rec.sessionId ?? file);
 }
 
 function activeMinutes(sessionEvents) {
@@ -145,8 +106,12 @@ function topModels(modelTotals, todayTotal) {
 function buildReport() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const todayMs = today.getTime();
-  const files = sessionFiles();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  const todayDateStr = `${yyyy}-${mm}-${dd}`;
+  const weekCutoff = Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000;
+  const files = usageFiles();
 
   let todayTotal = 0;
   let todayInput = 0;
@@ -154,7 +119,6 @@ function buildReport() {
   let todayCached = 0;
   let todayThought = 0;
   let callsToday = 0;
-  let errorsToday = 0;
   let weekTotal = 0;
   const todaySessions = new Set();
   const sessionEvents = new Map();
@@ -162,7 +126,13 @@ function buildReport() {
   let latest = null;
 
   for (const { file } of files) {
-    for (const line of readTail(file, TAIL_BYTES).split(/\r?\n/)) {
+    let content;
+    try {
+      content = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
       let rec;
       try {
@@ -170,60 +140,56 @@ function buildReport() {
       } catch {
         continue;
       }
+      if (typeof rec.inputTokens !== 'number') continue;
+
       const ts = Date.parse(rec.timestamp ?? '');
-      const isToday = Number.isFinite(ts) && ts >= todayMs;
+      const isToday = rec.localDate === todayDateStr;
+      const isWeek = Number.isFinite(ts) && ts >= weekCutoff;
+
       if (isToday) {
-        const key = sessionKey(rec, file);
-        const events = sessionEvents.get(key) ?? [];
-        events.push(ts);
-        sessionEvents.set(key, events);
+        callsToday++;
+        if (rec.sessionId) todaySessions.add(rec.sessionId);
+
+        const key = String(rec.sessionId ?? '');
+        if (Number.isFinite(ts)) {
+          const events = sessionEvents.get(key) ?? [];
+          events.push(ts);
+          sessionEvents.set(key, events);
+        }
+
+        todayTotal += rec.totalTokens ?? 0;
+        todayInput += rec.inputTokens ?? 0;
+        todayOutput += rec.outputTokens ?? 0;
+        todayCached += rec.cachedTokens ?? 0;
+        todayThought += rec.thoughtsTokens ?? 0;
+
+        const model = modelName(rec);
+        modelTotals.set(model, (modelTotals.get(model) ?? 0) + (rec.totalTokens ?? 0));
       }
-      if (isToday && isErrorRecord(rec)) errorsToday++;
 
-      if (rec.type !== 'assistant' || !rec.usageMetadata) continue;
-
-      const u = rec.usageMetadata;
-      const input = Number(u.promptTokenCount ?? 0);
-      const output = Number(u.candidatesTokenCount ?? 0);
-      const thought = Number(u.thoughtsTokenCount ?? 0);
-      const cached = Number(u.cachedContentTokenCount ?? 0);
-      const total = usageTotal(u);
-
-      weekTotal += total;
+      if (isWeek) {
+        weekTotal += rec.totalTokens ?? 0;
+      }
 
       if (Number.isFinite(ts) && (!latest || ts > latest.ts)) {
         latest = {
           ts,
-          input,
-          total,
+          input: rec.inputTokens ?? 0,
+          total: rec.totalTokens ?? 0,
           model: modelName(rec),
-          context: Number(rec.contextWindowSize ?? 0),
         };
-      }
-
-      if (isToday) {
-        callsToday++;
-        todaySessions.add(sessionKey(rec, file));
-        todayTotal += total;
-        todayInput += input;
-        todayOutput += output;
-        todayCached += cached;
-        todayThought += thought;
-        const model = modelName(rec);
-        modelTotals.set(model, (modelTotals.get(model) ?? 0) + total);
       }
     }
   }
 
   const now = Date.now();
   const latestTs = latest?.ts ?? now;
-  const ctxPct = latest?.context > 0 ? (latest.input / latest.context) * 100 : 0;
   const models = topModels(modelTotals, todayTotal);
   return {
     todayTotal,
-    ctxPct: clampPct(ctxPct),
+    ctxPct: 0,
     callsToday,
-    errorsToday,
+    errorsToday: 0,
     sessionsToday: todaySessions.size,
     cacheRate: todayInput > 0 ? clampPct((todayCached / todayInput) * 100) : 0,
     activeMinutes: activeMinutes(sessionEvents),
