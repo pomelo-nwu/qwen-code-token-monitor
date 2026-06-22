@@ -40,10 +40,9 @@ token-monitor-ble/
 
 ### 一、烧录固件（ESP32 端，只需一次）
 
-**前置条件：** 已安装 [ESP-IDF v5.x](https://dl.espressif.com/dl/esp-idf/)
+**前置条件：** 已安装 [ESP-IDF v5.x](https://dl.espressif.com/dl/esp-idf/)，Node.js（用于自动生成字体）
 
 ```bash
-# 进入固件目录
 cd firmware
 
 # 创建 secrets.h（BLE 模式不用填真实值，占位即可编译）
@@ -54,42 +53,23 @@ source ~/esp/esp-idf/export.sh
 
 # 编译 & 烧录（先插上 USB-C）
 idf.py set-target esp32s3
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash
+
+# ⬇️ 最重要的一行命令：BLE 名称 + 问候名 + 烧录，一步到位
+idf.py -DRLCD_BLE_DEVICE_NAME="QwenToken-你的名字" -DRLCD_GREETING_NAME="你的名字" -p /dev/cu.usbmodem* build flash
 ```
 
-烧录完成后屏幕亮起，显示 `QWEN CODE` 仪表盘骨架。
+烧录完成后屏幕亮起，显示带个性化问候语的 `QWEN CODE` 仪表盘。
 
-#### 自定义问候名
+#### 问候名是如何工作的
 
-屏幕头部默认显示 "早上好～"，如需加上名字（如 "山果，早上好～"），需要两步：
+`-DRLCD_GREETING_NAME` 参数会自动完成两件事：
 
-**1. 重新生成中文字体**（默认字体只含有限汉字，自定义名字需要补充）：
+1. **字体生成**：CMake 在构建时自动调用 `lv_font_conv`，将问候名中的字符合并进位图字体。无需手动重新生成字体——字体文件只在 `build/` 目录中生成，不会提交到仓库。
+2. **编译时注入**：名字通过预处理器宏传入，显示在仪表盘头部（如 `山果，下午好～`）。
 
-```bash
-npx lv_font_conv \
-  --font /Library/Fonts/Alibaba-PuHuiTi-Medium.otf \
-  --symbols "你的名字，早上好～下午晚上" \
-  --size 18 --bpp 1 --format lvgl \
-  --lv-font-name font_zh18 --lv-include lvgl.h --no-compress \
-  -o firmware/components/ui_app/font_zh18.c
-```
-
-> 将 `你的名字` 替换为实际名字，确保所有需要的汉字都在 `--symbols` 参数中。
-> 字体文件路径按系统实际情况调整（macOS 一般在 `/Library/Fonts/`）。
-
-**2. 编译时传入名字：**
-
-```bash
-# 先通过 cmake 设置名字变量
-cmake -DRLCD_GREETING_NAME="山果" -S . -B build
-
-# 然后正常编译烧录
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash
-```
-
-> **注意：** `idf.py build -- -DRLCD_GREETING_NAME="xxx"` **不生效**，idf.py 不支持 `--` 传递 cmake 参数，必须先单独调用 `cmake`。
+- **英文名**（如 "Robin"）直接可用——所有 ASCII 字母默认已包含。
+- **中文名**（如 "高铁"）会自动合并进字体——只需传入名字并编译。
+- 字体源文件（`font_zh18.c`）已加入 `.gitignore`，每次构建自动重新生成，仓库中不留任何用户名。
 
 > **Windows 用户：** 详见 [firmware/README.md](firmware/README.md) 中的 Windows quick start 章节。
 

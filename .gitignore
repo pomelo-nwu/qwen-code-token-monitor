@@ -9,6 +9,9 @@ firmware/managed_components/
 # Secrets
 firmware/main/secrets.h
 
+# Generated at build time by lv_font_conv (contains greeting name glyphs)
+firmware/components/ui_app/font_zh18.c
+
 # IDE & OS
 .DS_Store
 ._*

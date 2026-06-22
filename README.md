@@ -39,7 +39,7 @@ token-monitor-ble/
 
 ### Step 1: Flash Firmware (ESP32, one-time)
 
-**Prerequisites:** [ESP-IDF v5.x](https://dl.espressif.com/dl/esp-idf/) installed
+**Prerequisites:** [ESP-IDF v5.x](https://dl.espressif.com/dl/esp-idf/) installed, Node.js (for auto font generation)
 
 ```bash
 cd firmware
@@ -52,38 +52,23 @@ source ~/esp/esp-idf/export.sh
 
 # Build & flash (plug in USB-C first)
 idf.py set-target esp32s3
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash
+
+# ⬇️ The one-line command: BLE name + greeting name + flash
+idf.py -DRLCD_BLE_DEVICE_NAME="QwenToken-YourName" -DRLCD_GREETING_NAME="你的名字" -p /dev/cu.usbmodem* build flash
 ```
 
-After flashing, the screen lights up showing the `QWEN CODE` dashboard skeleton.
+After flashing, the screen lights up showing the `QWEN CODE` dashboard with the personalized greeting.
 
-#### Custom Greeting Name
+#### How Greeting Names Work
 
-The header shows "早上好～" (Good morning) by default. To add a name (e.g. "山果，早上好～"):
+The `-DRLCD_GREETING_NAME` flag does two things automatically:
 
-**1. Regenerate the Chinese font** (the default font only contains limited CJK characters):
+1. **Font generation**: CMake runs `lv_font_conv` at build time, merging the greeting name's characters into the bitmap font. No manual font regeneration needed — the font file is generated in `build/` and never committed to the repo.
+2. **Compile-time injection**: The name is passed as a preprocessor macro, shown on the dashboard header (e.g. `山果，下午好～`).
 
-```bash
-npx lv_font_conv \
-  --font /Library/Fonts/Alibaba-PuHuiTi-Medium.otf \
-  --symbols "YourName，早上好～下午晚上" \
-  --size 18 --bpp 1 --format lvgl \
-  --lv-font-name font_zh18 --lv-include lvgl.h --no-compress \
-  -o firmware/components/ui_app/font_zh18.c
-```
-
-> Replace `YourName` with the actual CJK characters. All required characters must be in `--symbols`.
-
-**2. Pass the name at build time:**
-
-```bash
-cmake -DRLCD_GREETING_NAME="山果" -S . -B build
-idf.py build
-idf.py -p /dev/cu.usbmodem* flash
-```
-
-> **Note:** `idf.py build -- -DRLCD_GREETING_NAME="xxx"` **does not work** — idf.py doesn't support `--` for passing cmake variables. You must call `cmake` separately first.
+- **English names** (e.g. "Robin") work out of the box — all ASCII letters are included by default.
+- **CJK names** (e.g. "高铁") are auto-merged into the font symbols — just pass the name and build.
+- The font source file (`font_zh18.c`) is `.gitignore`d and regenerated each build, so no user names are committed to the repo.
 
 > **Windows users:** See the Windows quick start section in [firmware/README.md](firmware/README.md).
 
