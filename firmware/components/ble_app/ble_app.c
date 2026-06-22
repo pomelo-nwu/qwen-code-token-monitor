@@ -15,8 +15,12 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
+#ifndef RLCD_BLE_DEVICE_NAME
+#define RLCD_BLE_DEVICE_NAME "QwenToken"
+#endif
+
 static const char *TAG = "ble_app";
-static const char *DEVICE_NAME = "QwenToken";
+static const char *DEVICE_NAME = RLCD_BLE_DEVICE_NAME;
 
 static ble_data_cb_t s_data_cb;
 static uint8_t s_own_addr_type;

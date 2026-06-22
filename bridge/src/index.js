@@ -3,7 +3,10 @@ import path from 'node:path';
 import os from 'node:os';
 import noble from '@abandonware/noble';
 
-const DEVICE_NAMES = new Set(['QwenToken', 'Qwen Usage']);
+const BLE_DEVICE_NAMES = new Set(
+  (process.env.QWEN_BLE_DEVICE_NAME || 'QwenToken,Qwen Usage')
+    .split(',').map(s => s.trim())
+);
 const SERVICE_UUID = '00112233445566778899aabbccddeeff';
 const DATA_CHAR_UUID = '00112233445566778899aabbccddee01';
 const INTERVAL_MS = Number(process.env.QWEN_BLE_PUSH_MS ?? 1000);
@@ -351,7 +354,7 @@ function connect(peripheral) {
 function startScan() {
   if (dataChar || connecting) return;
   clearTimeout(scanTimer);
-  console.log('[ble] scanning for QwenToken');
+  console.log(`[ble] scanning for ${[...BLE_DEVICE_NAMES].join(' or ')}`);
   try {
     noble.startScanning([], false);
   } catch (e) {
@@ -371,14 +374,25 @@ noble.on('stateChange', (state) => {
 
 noble.on('discover', (peripheral) => {
   const name = peripheral.advertisement.localName;
-  if (!DEVICE_NAMES.has(name)) return;
+  if (!BLE_DEVICE_NAMES.has(name)) return;
   connect(peripheral);
 });
 
 startPushLoop();
 
-process.on('SIGINT', () => {
+function shutdown() {
   clearInterval(pushTimer);
-  if (connectedPeripheral) connectedPeripheral.disconnect();
-  process.exit(0);
-});
+  clearInterval(scanTimer);
+  if (connectedPeripheral) {
+    connectedPeripheral.disconnect(() => {
+      noble.stopScanning();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 2000);
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

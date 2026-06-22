@@ -93,6 +93,7 @@ class StatusManager: ObservableObject {
     @Published var bridgeRunning = false
     @Published var bridgePID: Int = -1
     @Published var fileExists = false
+    @Published var bleDeviceName: String = UserDefaults.standard.string(forKey: "bleDeviceName") ?? ""
 
     private var timer: Timer?
 
@@ -140,6 +141,29 @@ class StatusManager: ObservableObject {
         Thread.sleep(forTimeInterval: 1)
         shell(["load", PLIST])
         refresh()
+    }
+
+    func applyBleDeviceName() {
+        UserDefaults.standard.set(bleDeviceName, forKey: "bleDeviceName")
+        updatePlistEnvVar("QWEN_BLE_DEVICE_NAME", bleDeviceName)
+        doRestart()
+    }
+
+    private func updatePlistEnvVar(_ key: String, _ value: String) {
+        guard FileManager.default.fileExists(atPath: PLIST) else { return }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: PLIST)),
+              var plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return }
+
+        var envVars = (plist["EnvironmentVariables"] as? [String: String]) ?? [:]
+        if value.isEmpty {
+            envVars.removeValue(forKey: key)
+        } else {
+            envVars[key] = value
+        }
+        plist["EnvironmentVariables"] = envVars
+
+        guard let updatedData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else { return }
+        try? updatedData.write(to: URL(fileURLWithPath: PLIST))
     }
 }
 
@@ -297,6 +321,20 @@ struct DashboardView: View {
             }
             .padding(.vertical, 8)
 
+            // ── BLE Device Name ──
+            Divider()
+
+            HStack(spacing: 8) {
+                Text("BLE Name:")
+                    .font(.system(size: 11))
+                TextField("QwenToken", text: $manager.bleDeviceName)
+                    .font(.system(size: 11))
+                    .textFieldStyle(.roundedBorder)
+                Button("Apply") { manager.applyBleDeviceName() }
+                    .font(.system(size: 11))
+            }
+            .padding(.vertical, 6)
+
             // ── Controls ──
             HStack(spacing: 8) {
                 if manager.bridgeRunning {
@@ -342,7 +380,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 340, height: 460)
+        popover.contentSize = NSSize(width: 340, height: 500)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: DashboardView(manager: manager))
 

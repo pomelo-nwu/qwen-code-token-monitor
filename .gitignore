@@ -17,3 +17,8 @@ firmware/main/secrets.h
 *~
 .vscode/
 .idea/
+
+.qwen/skills/auto-skill-*
+
+# DMG build artifact
+*.dmg
